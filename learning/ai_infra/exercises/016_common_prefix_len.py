@@ -47,3 +47,22 @@ def moe_dispatch_combine(
 ) -> Tensor:
 
     raise NotImplementedError
+
+# ============================================================
+# 题 18：分段归约
+#   values: [T, D]，seg_ids: [T] int64（取值 0..num_segs-1，无序，可能有空段）
+#   segment_sum -> [num_segs, D]，空段为 0
+#   segment_logsumexp -> [num_segs, D]，空段为 -inf
+# 要求：
+#   segment_sum 用 index_add_ / scatter_add_（禁止循环）
+#   segment_logsumexp 要数值稳定：先按段求 max（提示 scatter_reduce_ 的 "amax"），
+#   再减去 max 求 exp 和，最后 log 加回；不能直接 exp 大数
+# ============================================================
+
+
+def segment_sum(values: Tensor, seg_ids: Tensor, num_segs: int) -> Tensor:
+    raise NotImplementedError
+
+
+def segment_logsumexp(values: Tensor, seg_ids: Tensor, num_segs: int) -> Tensor:
+    raise NotImplementedError
