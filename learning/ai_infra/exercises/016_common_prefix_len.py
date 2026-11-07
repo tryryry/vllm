@@ -113,4 +113,5 @@ def segment_logsumexp(values: Tensor, seg_ids: Tensor, num_segs: int) -> Tensor:
 
     out = torch.zeros((num_segs, D))
     out.index_add_(0, seg_ids, value_exp)
-    return torch.log(out)
+    # 最后需要加回 seg_max
+    return torch.log(out) + seg_max
