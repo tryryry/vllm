@@ -45,8 +45,42 @@ def moe_dispatch_combine(
     expert_fn: Callable[[int, Tensor], Tensor],
     num_experts: int,
 ) -> Tensor:
+    # T, D = x.shape
+    # K = topk_ids.shape[1]
+    # out = torch.zeros((T, D), dtype=x.dtype, device=x.device)
+    # for i in range(T):
+    #     for j in range(K):
+    #         expert_out = expert_fn(topk_ids[i, j].item(), x[i:i+1]) # [1, D]
+    #         out[i] +=  topk_weights[i, j] * expert_out[0] # [D]
+    # return out
+    T, D = x.shape
+    K = topk_ids.shape[1]
+    out = torch.zeros((T, D), dtype=x.dtype, device=x.device)
+    flat_ids = topk_ids.reshape(-1)
+    flat_weight = topk_weights.reshape(-1)
 
-    raise NotImplementedError
+    order = torch.argsort(flat_ids) # [T * K]
+    sorted_ids = flat_ids[order]  # 对应哪一个专家 [T * K]
+    sorted_weight = flat_weight[order] # 对应哪一个权重 [T * K]
+    token_ids = order // K # 对应x的哪一行 [T * K]
+
+    for i in range(num_experts):
+        # 取专家
+        mask = sorted_ids == i # [T * K]
+        if not mask.any():
+            continue
+        # 取输入
+        expert_token_ids = token_ids[mask] # [n]
+        expert_x = x[expert_token_ids] # [n, D]
+        # 取权重
+        expert_weight = sorted_weight[mask] # [n]
+        # 专家运算
+        expert_out = expert_fn(i, expert_x) # [n, D]
+        # 乘以专家在当前x的每一行的权重
+        expert_out_weight = expert_weight.unsqueeze(1) * expert_out # [n, D]
+        out.index_add_(0, expert_token_ids, expert_out_weight)
+    return out
+
 
 # ============================================================
 # 题 18：分段归约
@@ -57,12 +91,26 @@ def moe_dispatch_combine(
 #   segment_sum 用 index_add_ / scatter_add_（禁止循环）
 #   segment_logsumexp 要数值稳定：先按段求 max（提示 scatter_reduce_ 的 "amax"），
 #   再减去 max 求 exp 和，最后 log 加回；不能直接 exp 大数
+#   segment_sum:        a + b
+#   segment_logsumexp:  log(exp(a - max) + exp(b - max))
 # ============================================================
 
-
 def segment_sum(values: Tensor, seg_ids: Tensor, num_segs: int) -> Tensor:
-    raise NotImplementedError
-
+    T, D = values.shape
+    out = torch.zeros((num_segs, D))
+    out.index_add_(0, seg_ids, values)
+    return out
 
 def segment_logsumexp(values: Tensor, seg_ids: Tensor, num_segs: int) -> Tensor:
-    raise NotImplementedError
+    T, D = values.shape
+    seg_max = torch.full((num_segs, D), float("-inf")) # [num_segs, D]
+    index = seg_ids.unsqueeze(1).expand(-1, D)
+    seg_max.scatter_reduce_(0, index, values, reduce="amax", include_self=False)
+
+    row_max = seg_max[seg_ids] # [T, D]
+    value_minus_max =  values - row_max # [T, D]
+    value_exp = torch.exp(value_minus_max)
+
+    out = torch.zeros((num_segs, D))
+    out.index_add_(0, seg_ids, value_exp)
+    return torch.log(out)
