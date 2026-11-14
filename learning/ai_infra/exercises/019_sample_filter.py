@@ -33,8 +33,8 @@ def sample_filter(
 
     probs_values_k = torch.where(mask, probs_values, 0)
     prob_values_k_p = probs_values_k.cumsum(dim=-1) >= top_p.unsqueeze(-1)
-    first = prob_values_k_p.argmax(dim=-1)  # [B]
-    keep_all = ~prob_values_k_p.any(dim=-1) | top_p == 1
+    first = prob_values_k_p.int().argmax(dim=-1)  # [B]
+    keep_all = (~prob_values_k_p.any(dim=-1)) | top_p == 1
     first = torch.where(keep_all, V - 1, first)
     mask = torch.arange(V).unsqueeze(0) <= first.unsqueeze(-1)
     probs_values_k = torch.where(mask, probs_values_k, 0)
