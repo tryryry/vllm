@@ -1,5 +1,6 @@
 from typing import Tuple
 
+import torch
 from torch import Tensor
 
 
@@ -18,4 +19,19 @@ from torch import Tensor
 def token_logprobs(
     logits: Tensor, token_ids: Tensor, top_k: int
 ) -> Tuple[Tensor, Tensor, Tensor]:
-    raise NotImplementedError
+    log_maxs, _ = torch.max(logits, dim=-1)  # [B]
+    logits_minus_max = logits - log_maxs.unsqueeze(-1)  # [B, V]
+    logits_log = torch.log(torch.sum(torch.exp(logits_minus_max), dim=-1))  # [B]
+    logits_logprob = logits_minus_max - logits_log.unsqueeze(-1)  # [B, V]
+
+    chosen_logprobs = logits_logprob.gather(
+        dim=-1, index=token_ids.unsqueeze(-1)
+    ).squeeze(-1)
+
+    logits_logpro_sorted, logits_logpro_sorted_ids = logits_logprob.sort(
+        dim=-1, descending=True, stable=True
+    )
+    topk_logprobs = logits_logpro_sorted[:, :top_k]
+    topk_ids = logits_logpro_sorted_ids[:, :top_k]
+
+    return chosen_logprobs, topk_logprobs, topk_ids

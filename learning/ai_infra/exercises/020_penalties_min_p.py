@@ -1,3 +1,4 @@
+import torch
 from torch import Tensor
 
 
@@ -31,8 +32,35 @@ def apply_penalties(
     repetition_penalty: Tensor,
     pad_id: int = -1,
 ) -> Tensor:
-    raise NotImplementedError
+    B, V = logits.shape
+    valid = output_ids != pad_id
+    output_ids_zeros = torch.where(valid, output_ids, 0)
+    count = torch.zeros_like(logits)
+    # count[b, output_ids_zeros[b, j]] += src[b, j]
+    count.scatter_add_(
+        dim=1, index=output_ids_zeros, src=valid.to(dtype=count.dtype)
+    )  # [B, V]
+
+    mask = count > 0
+    logits_repetition_penalty = torch.where(
+        mask,
+        torch.where(
+            logits > 0,
+            logits / repetition_penalty.unsqueeze(-1),
+            logits * repetition_penalty.unsqueeze(-1),
+        ),
+        logits,
+    )
+    logits_presence_frequency_penalty = (
+        logits_repetition_penalty
+        - presence_penalty.unsqueeze(-1) * (mask)
+        - frequency_penalty.unsqueeze(-1) * count
+    )
+    return logits_presence_frequency_penalty
 
 
 def min_p_filter(probs: Tensor, min_p: Tensor) -> Tensor:
-    raise NotImplementedError
+    probs_max, _ = probs.max(dim=1)  # [B]
+    min_p_threshold = min_p * probs_max  # [B]
+    out = torch.where(probs < min_p_threshold.unsqueeze(-1), 0, probs)  # [B, V]
+    return out / torch.sum(out, dim=1, keepdim=True)

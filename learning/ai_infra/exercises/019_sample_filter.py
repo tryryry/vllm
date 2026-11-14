@@ -1,3 +1,4 @@
+import torch
 from torch import Tensor
 
 
@@ -22,4 +23,23 @@ from torch import Tensor
 def sample_filter(
     logits: Tensor, temperature: Tensor, top_k: Tensor, top_p: Tensor
 ) -> Tensor:
-    raise NotImplementedError
+    B, V = logits.shape
+    probs = torch.softmax(logits / temperature.unsqueeze(-1), dim=-1)
+    probs_values, probs_indices = probs.sort(dim=-1, descending=True, stable=True)
+
+    rank = torch.arange(V).unsqueeze(0)  # [1, V]
+    top_k_ext = top_k.unsqueeze(-1)  # [B, 1]
+    mask = (top_k_ext >= V) | (top_k_ext <= 0) | (rank < top_k_ext)  # [B, V]
+
+    probs_values_k = torch.where(mask, probs_values, 0)
+    prob_values_k_p = probs_values_k.cumsum(dim=-1) >= top_p.unsqueeze(-1)
+    first = prob_values_k_p.argmax(dim=-1)  # [B]
+    keep_all = ~prob_values_k_p.any(dim=-1) | top_p == 1
+    first = torch.where(keep_all, V - 1, first)
+    mask = torch.arange(V).unsqueeze(0) <= first.unsqueeze(-1)
+    probs_values_k = torch.where(mask, probs_values_k, 0)
+
+    out = torch.zeros_like(logits)
+    out.scatter_(-1, probs_indices, probs_values_k)
+
+    return out / out.sum(dim=-1, keepdim=True)

@@ -1,5 +1,6 @@
 from typing import Tuple
 
+import torch
 from torch import Tensor
 
 
@@ -21,4 +22,14 @@ from torch import Tensor
 
 
 def verify_greedy(draft_tokens: Tensor, target_logits: Tensor) -> Tuple[Tensor, Tensor]:
-    raise NotImplementedError
+    B, K = draft_tokens.shape
+    target_tokens = torch.argmax(target_logits, dim=-1)  # [B, K + 1]
+    mask = draft_tokens == target_tokens[:, :K]  # [B, K]
+    mask_cum_prod = mask.cumprod(dim=-1)  # [B, K]
+    accept_len = torch.sum(mask_cum_prod, dim=-1)  # [B]
+    pos = torch.arange(K + 1, device=draft_tokens.device)
+    output_tokens = torch.where(
+        pos.unsqueeze(0) <= accept_len.unsqueeze(-1), target_tokens, -1
+    )
+
+    return accept_len, output_tokens
