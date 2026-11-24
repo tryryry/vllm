@@ -19,7 +19,12 @@ from torch import Tensor
 
 class CudaGraphDecoder:
     def __init__(self, weight: Tensor, max_bs: int):
-        raise NotImplementedError
+       self.weight = weight
+       self.max_bs = max_bs
+       
+       D = weight.shape[0]
+       self.statis_input = weight.new_zeros((max_bs, D))
+       self.static_output = weight.new_empty((max_bs, D))
 
     def capture(self) -> None:
         raise NotImplementedError

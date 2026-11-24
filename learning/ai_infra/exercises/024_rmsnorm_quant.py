@@ -1,3 +1,4 @@
+import torch
 from typing import Callable, Tuple
 
 from torch import Tensor
@@ -16,8 +17,17 @@ from torch import Tensor
 
 
 def rmsnorm_quant(x: Tensor, weight: Tensor, eps: float = 1e-6) -> Tuple[Tensor, Tensor]:
-    raise NotImplementedError
+    x_sq = x * x
+    x_mean = x_sq.mean(dim=-1, keepdim=True) # [T, 1]
+    x_eps = x_mean + eps # [T, 1]
+    x_rsqrt = torch.rsqrt(x_eps) # [T, 1]
+    x_rms = x * x_rsqrt * weight  # [T, D]
+    
+    x_max = x_rms.abs().amax(dim=-1, keepdim=True) # [T, 1]
+    x_scale = x_max / 127
+    return (x / x_scale).round().clamp(-127, 127).to(torch.int8), x_scale.squeeze(-1)
+    
 
 
 def get_compiled_rmsnorm_quant() -> Callable[..., Tuple[Tensor, Tensor]]:
-    raise NotImplementedError
+     return torch.compile(rmsnorm_quant)

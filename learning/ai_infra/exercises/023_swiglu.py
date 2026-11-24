@@ -17,12 +17,16 @@ from torch import Tensor
 class SwiGLUFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, gate: Tensor, up: Tensor) -> Tensor:  # type: ignore[override]
-        raise NotImplementedError
+        out = (gate * torch.sigmoid(gate)) * up
+        ctx.save_for_backward(gate, up)
+        return out
 
     @staticmethod
     def backward(ctx, grad_out: Tensor):  # type: ignore[override]
-        raise NotImplementedError
+        gate, up = ctx.saved_tensors
+        gate_grad = torch.sigmoid(gate) * (1 + gate * (1 - torch.sigmoid(gate))) * up * grad_out
+        up_grad = (gate * torch.sigmoid(gate)) * grad_out
+        return gate_grad, up_grad
 
-
-def swiglu(gate: Tensor, up: Tensor) -> Tensor:
-    raise NotImplementedError
+def swiglu (gate: Tensor, up: Tensor) -> Tensor:
+    return SwiGLUFunction.apply(gate, up)

@@ -1,3 +1,4 @@
+import torch
 from typing import List, Tuple
 
 from torch import Tensor
@@ -24,4 +25,41 @@ def overlap_copy_compute(
     use_pinned: bool = True,
     overlap: bool = True,
 ) -> Tuple[Tensor, float]:
-    raise NotImplementedError
+    if use_pinned:
+        host_chunks = [chunk.pin_memory() for chunk in host_chunks]
+    
+    copy_stream = torch.cuda.Stream(device=weight.device)
+    compute_stream = torch.cuda.Stream(device=weight.device)
+    
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    
+    current_stream = torch.cuda.current_stream(device=weight.device)
+    start.record(current_stream)
+    
+    res = []
+    for chunk in host_chunks:
+        if overlap:
+            copy_stream.wait_event(start)
+            with torch.cuda.stream(copy_stream):
+                chunk_gpu = chunk.to(weight.device, non_blocking=True)
+                copy_done = torch.cuda.Event()
+                copy_done.record()
+            
+            compute_stream.wait_event(copy_done) # compute_stream上后续的GPU操作需要等copy_done完成，python可以继续执行
+            with torch.cuda.stream(compute_stream):
+                chunk_computer = chunk_gpu @ weight
+                chunk_gpu.record_stream(compute_stream)
+                res.append(chunk_computer)
+        else:
+            chunk_gpu = chunk.to(weight.device, non_blocking=False)
+            res.append(chunk_gpu @ weight)
+    res_stream = compute_stream if overlap else current_stream
+    
+    with torch.cuda.stream(res_stream):
+        out = torch.cat(res, dim=0)
+        end.record()
+    
+    end.synchronize() # 当前cpu需要等待 res_stream 完成才能执行下一行python代码
+    elapsed_ms = start.elapsed_time(end)
+    return out, elapsed_ms
