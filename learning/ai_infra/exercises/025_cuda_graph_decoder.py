@@ -1,5 +1,8 @@
-from torch import Tensor
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import torch
+from torch import Tensor
 
 # ============================================================
 # 题 25：CUDA Graph 捕获一个 decode step（需要 GPU）
@@ -19,15 +22,40 @@ from torch import Tensor
 
 class CudaGraphDecoder:
     def __init__(self, weight: Tensor, max_bs: int):
-       self.weight = weight
-       self.max_bs = max_bs
-       
-       D = weight.shape[0]
-       self.statis_input = weight.new_zeros((max_bs, D))
-       self.static_output = weight.new_empty((max_bs, D))
+        self.weight = weight
+        self.max_bs = max_bs
+
+        D = weight.shape[0]
+        self.static_input = weight.new_zeros((max_bs, D))
+        self.static_output = weight.new_empty((max_bs, D))
+
+        self.g = torch.cuda.CUDAGraph()
 
     def capture(self) -> None:
-        raise NotImplementedError
+        current_stream = torch.cuda.current_stream(self.weight.device)
+        side_stream = torch.cuda.Stream(self.weight.device)
+
+        side_stream.wait_stream(current_stream)
+
+        with torch.cuda.stream(side_stream):
+            for _ in range(3):
+                out = self.static_input @ self.weight
+                out = torch.nn.functional.silu(out)
+                out = out @ self.weight
+
+        current_stream.wait_stream(side_stream)
+
+        with torch.cuda.graph(self.g):
+            self.static_output.copy_(
+                torch.nn.functional.silu(self.static_input @ self.weight) @ self.weight
+            )
 
     def replay(self, x: Tensor) -> Tensor:
-        raise NotImplementedError
+        bs = x.shape[0]
+        self.static_input[:bs].copy_(x)
+
+        self.g.replay()
+
+        out = self.static_output[:bs].clone()
+
+        return out

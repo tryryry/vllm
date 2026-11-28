@@ -1,31 +1,52 @@
-from typing import Optional
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import torch
+import torch.distributed as dist
 from torch import Tensor
-
 
 # ============================================================
 # 题 28：张量并行的两种线性层（需要 2 卡，torchrun 单独跑）
 #   假设完整权重 W: [out_features, in_features]（torch.nn.Linear 的布局），x: [T, in]
 #   tp_col_linear：按 out_features 切分（column parallel）
-#       weight_shard: [out/W_world, in]，每个 rank 算自己那块，
-#       gather_output=True 时用 all_gather 拼回 [T, out]；False 时直接返回本地 [T, out/ws]
+#       weight_shard: [out/W_world, in]，每个 rank 算自己那块。
+#       gather_output=True 时用 all_gather 拼回 [T, out]。
+#       False 时直接返回本地 [T, out/ws]。
 #   tp_row_linear：按 in_features 切分（row parallel）
 #       weight_shard: [out, in/ws]，输入 x 已经是切好的 [T, in/ws]，
-#       本地矩乘后 all_reduce(SUM) 得到 [T, out]；bias 只能加一次（rank 0 加，或 reduce 后加）
+#       本地矩乘后 all_reduce(SUM) 得到 [T, out]。
+#       bias 只加一次，可以在 rank 0 上加，或在 reduce 后加。
 #   判分（在 __main__ 里）：与单卡 full weight 的 F.linear 结果对齐。
 # 运行：torchrun --nproc_per_node=2 028_tp_linear.py --tp
 # ============================================================
 
 
+# 「列」和「行」按乘法右边的 W.T 命名。题里存的是 W（[out, in]），
+# 所以列并行切 W 的第 0 维，行并行切 W 的第 1 维。
 def tp_col_linear(
-    x: Tensor, weight_shard: Tensor, bias_shard: Optional[Tensor], gather_output: bool = True
+    x: Tensor,
+    weight_shard: Tensor,
+    bias_shard: Tensor | None,
+    gather_output: bool = True,
 ) -> Tensor:
-    raise NotImplementedError
+    part_out = x @ weight_shard.T
+    if bias_shard is not None:
+        part_out = part_out + bias_shard
+    if gather_output:
+        parts = [torch.empty_like(part_out) for _ in range(dist.get_world_size())]
+        dist.all_gather(parts, part_out)
+    else:
+        return part_out
+    out = torch.cat(parts, dim=1)
+    return out
 
 
-def tp_row_linear(x_shard: Tensor, weight_shard: Tensor, bias: Optional[Tensor]) -> Tensor:
-    raise NotImplementedError
+def tp_row_linear(x_shard: Tensor, weight_shard: Tensor, bias: Tensor | None) -> Tensor:
+    part_out = x_shard @ weight_shard.T
+    dist.all_reduce(part_out, op=dist.ReduceOp.SUM)
+    if bias is not None:
+        return part_out + bias
+    return part_out
 
 
 # ------------------------------------------------------------
@@ -55,7 +76,10 @@ def _tp_self_test() -> None:
     ref = F.linear(x, w, b)
 
     col_out = col_fn(
-        x, w.chunk(ws, dim=0)[rank].contiguous(), b.chunk(ws, dim=0)[rank].contiguous(), True
+        x,
+        w.chunk(ws, dim=0)[rank].contiguous(),
+        b.chunk(ws, dim=0)[rank].contiguous(),
+        True,
     )
     row_out = row_fn(
         x.chunk(ws, dim=1)[rank].contiguous(), w.chunk(ws, dim=1)[rank].contiguous(), b

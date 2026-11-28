@@ -1,5 +1,7 @@
-from torch import Tensor
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from torch import Tensor
 
 # ============================================================
 # 题 27：KV cache 原地写入（零新增分配，需要 GPU）
@@ -14,5 +16,10 @@ from torch import Tensor
 # ============================================================
 
 
-def write_kv_cache_(k_pool: Tensor, v_pool: Tensor, loc: Tensor, k: Tensor, v: Tensor) -> None:
-    raise NotImplementedError
+def write_kv_cache_(
+    k_pool: Tensor, v_pool: Tensor, loc: Tensor, k: Tensor, v: Tensor
+) -> None:
+    k_pool[loc] = k
+    v_pool[loc] = v
+
+    return
